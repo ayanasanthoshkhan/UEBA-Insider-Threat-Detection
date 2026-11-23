@@ -1,0 +1,15 @@
+{
+    "model": "Random Forest",
+    "training_rows": 268979,
+    "testing_rows": 61473,
+    "training_positive": 812,
+    "testing_positive": 154,
+    "training_cutoff": "2011-02-06",
+    "predictor_count": 69,
+    "accuracy": 0.9990076944349552,
+    "precision": 0.746031746031746,
+    "recall": 0.9155844155844156,
+    "f1_score": 0.8221574344023324,
+    "roc_auc": 0.9997987954412553,
+    "pr_auc": 0.9391602134655286
+}
