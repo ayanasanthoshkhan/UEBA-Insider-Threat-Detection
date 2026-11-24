@@ -173,9 +173,10 @@ DATA_DIR = (
     Path(
         os.environ.get(
             "UEBA_DATA_ROOT",
-            r"D:\UEBA_Capstone\data"
+            r"D:\UEBA_Capstone"
         )
     )
+    / "data"
     / "processed"
     / "ml_handoff"
 )
