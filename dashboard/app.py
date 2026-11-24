@@ -1049,31 +1049,190 @@ if page == "Peer Baselines":
                 )
 
 # ----------------------------------------
-# TAB 7: MODEL INTEGRATION
+# TAB 7: SAVED ML RESULTS (MEMBER B)
 # ----------------------------------------
 if page == "ML Integration":
-    section_heading("Machine learning integration", "layers")
-    st.info(
-        "Awaiting Member B's verified CERT labels, "
-        "trained models, prediction outputs and "
-        "evaluation results."
+    section_heading("Machine learning results", "layers")
+    st.caption(
+        "CERT r4.2 incident-derived classification · Member B's saved Random Forest "
+        "evaluation and SHAP explanations. These are preliminary research results, "
+        "not validated early-warning predictions."
     )
-    st.markdown(
-        """
-        **Planned integration components**
-        - Isolation Forest anomaly scores
-        - Random Forest classification results
-        - Precision, recall and PR-AUC
-        - Confusion matrix
-        - SHAP feature explanations
-        - Suspicious user-day investigation table
-        """
-    )
-    st.warning(
-        "No model predictions are currently displayed. "
-        "Observed activity should not be presented "
-        "as confirmed insider threats."
-    )
+
+    # Run Streamlit from the repository root; results are tracked in GitHub.
+    ml_root = Path(__file__).resolve().parents[1]
+    metrics_path = ml_root / "results" / "model_metrics.json"
+    matrix_path = ml_root / "results" / "confusion_matrix.png"
+    rf_path = ml_root / "results" / "feature_importance.csv"
+    shap_path = ml_root / "results" / "shap" / "shap_summary.png"
+    shap_bar_path = ml_root / "results" / "shap" / "shap_feature_importance.png"
+    shap_csv_path = ml_root / "results" / "shap" / "shap_importance.csv"
+    # Private model and labeled dataset are stored outside GitHub.
+    artifact_root = Path(os.environ.get("UEBA_DATA_ROOT", r"D:\UEBA_Capstone"))
+    model_path = artifact_root / "models" / "ueba_random_forest.joblib"
+    labeled_path = artifact_root / "data" / "processed" / "ueba_labeled_dataset.parquet"
+
+    performance_tab, importance_tab, explorer_tab = st.tabs([
+        "Model performance", "Feature importance & SHAP", "Risk explorer"
+    ])
+
+    with performance_tab:
+        if not metrics_path.is_file():
+            st.warning("Model evaluation file not found: results/model_metrics.json")
+        else:
+            try:
+                with metrics_path.open(encoding="utf-8") as handle:
+                    saved_metrics = json.load(handle)
+                metric_items = [
+                    ("Precision", "precision"),
+                    ("Recall", "recall"),
+                    ("F1-score", "f1_score"),
+                    ("PR-AUC", "pr_auc"),
+                    ("ROC-AUC", "roc_auc"),
+                    ("Accuracy", "accuracy"),
+                ]
+                for chunk_start in (0, 3):
+                    cols = st.columns(3)
+                    for col, (label, key) in zip(cols, metric_items[chunk_start:chunk_start+3]):
+                        value = saved_metrics.get(key)
+                        col.metric(label, f"{float(value):.4f}" if value is not None else "N/A")
+                st.caption(
+                    f"Saved evaluation: {saved_metrics.get('model', 'Model')} · "
+                    f"Train rows: {saved_metrics.get('training_rows', 'N/A'):,} · "
+                    f"Test rows: {saved_metrics.get('testing_rows', 'N/A'):,} · "
+                    f"Train positives: {saved_metrics.get('training_positive', 'N/A')} · "
+                    f"Test positives: {saved_metrics.get('testing_positive', 'N/A')} · "
+                    f"Chronological test starts: {saved_metrics.get('training_cutoff', 'N/A')}"
+                )
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                st.error(f"Could not load saved model metrics: {exc}")
+
+        if matrix_path.is_file():
+            st.subheader("Saved confusion matrix")
+            st.image(str(matrix_path), width="stretch")
+        else:
+            st.info("No saved confusion-matrix image found.")
+        st.warning(
+            "Interpret these reported scores as preliminary same-day incident-label "
+            "classification. The labeling and potential temporal/target leakage "
+            "must be reviewed before claiming reliable early warning."
+        )
+
+    with importance_tab:
+        if rf_path.is_file():
+            st.subheader("Random Forest feature importance")
+            rf_importance = pd.read_csv(rf_path)
+            if {"feature", "importance"}.issubset(rf_importance.columns):
+                st.bar_chart(rf_importance.head(15).set_index("feature")["importance"])
+            else:
+                st.dataframe(rf_importance.head(15), width="stretch")
+        else:
+            st.info("Random Forest importance CSV not found.")
+
+        if shap_path.is_file():
+            st.subheader("Saved SHAP summary")
+            st.image(str(shap_path), width="stretch")
+        if shap_bar_path.is_file():
+            st.subheader("Saved SHAP global importance")
+            st.image(str(shap_bar_path), width="stretch")
+        if shap_csv_path.is_file():
+            st.subheader("Numerical SHAP importance")
+            st.dataframe(pd.read_csv(shap_csv_path).head(20),
+                         hide_index=True, width="stretch")
+        if not (shap_path.is_file() or shap_bar_path.is_file() or shap_csv_path.is_file()):
+            st.info("No saved SHAP artifacts found.")
+        st.caption("SHAP plots describe the saved Random Forest model; they do not establish causality.")
+
+    with explorer_tab:
+        st.subheader("User-day risk explorer")
+        st.caption(
+            "Explore incident-class scores from Member B's existing Random Forest. "
+            "Only observations from the held-out chronological test period are selectable."
+        )
+        missing = [str(p) for p in (model_path, labeled_path) if not p.is_file()]
+        if missing:
+            st.warning("Required private artifacts are not available: " + ", ".join(missing))
+        else:
+            try:
+                import joblib
+                import numpy as np
+
+                @st.cache_resource(show_spinner="Loading saved Random Forest model…")
+                def _ueba_load_saved_model(path, mtime):
+                    return joblib.load(path)
+
+                @st.cache_data(show_spinner="Loading labeled user-day data…")
+                def _ueba_load_labeled_data(path, mtime):
+                    return pd.read_parquet(path)
+
+                saved_model = _ueba_load_saved_model(str(model_path), model_path.stat().st_mtime_ns)
+                labeled_df = _ueba_load_labeled_data(str(labeled_path), labeled_path.stat().st_mtime_ns)
+                feature_names = list(saved_model.feature_names_in_)
+                if len(feature_names) != 69:
+                    raise ValueError(f"Expected 69 saved predictors, found {len(feature_names)}")
+                if not {"user", "day", "label"}.issubset(labeled_df.columns):
+                    raise ValueError("Required user/day/label columns are missing")
+                missing_features = [name for name in feature_names if name not in labeled_df.columns]
+                if missing_features:
+                    raise ValueError("Labeled data is missing model features: " + ", ".join(missing_features))
+                if not hasattr(saved_model, "predict_proba"):
+                    raise ValueError("The saved model has no predict_proba method")
+
+                labeled_df = labeled_df.copy(deep=False)
+                labeled_df["day"] = pd.to_datetime(labeled_df["day"], errors="coerce")
+                if labeled_df["day"].isna().any():
+                    raise ValueError("Some labeled dataset dates cannot be parsed")
+                # Match the training script's 80%-of-unique-days chronological split.
+                days = sorted(labeled_df["day"].drop_duplicates().tolist())
+                cutoff = pd.Timestamp(days[int(len(days) * 0.8)])
+                metric_cutoff = pd.Timestamp(saved_metrics.get("training_cutoff")) if metrics_path.is_file() else None
+                if metric_cutoff is not None and cutoff != metric_cutoff:
+                    raise ValueError(f"Training cutoff mismatch: data={cutoff.date()}, metrics={metric_cutoff.date()}")
+                held_out = labeled_df.loc[labeled_df["day"] >= cutoff]
+                if held_out.empty:
+                    raise ValueError("No held-out records found")
+                st.caption(f"Held-out period starts {cutoff.date()} · {len(held_out):,} user-days")
+
+                available_users = sorted(held_out["user"].dropna().astype(str).unique().tolist())
+                selected_user = st.selectbox("Employee ID", available_users, key="ml_risk_user")
+                one_user = held_out.loc[held_out["user"].astype(str) == selected_user]
+                user_dates = sorted(one_user["day"].dt.strftime("%Y-%m-%d").unique().tolist())
+                selected_date = st.selectbox("Evaluation date", user_dates, key="ml_risk_date")
+                selected = one_user.loc[one_user["day"].dt.strftime("%Y-%m-%d") == selected_date]
+                if len(selected) != 1:
+                    raise ValueError(f"Expected one record for this user-day; found {len(selected)}")
+
+                # Use exactly the feature order recorded by the trained pipeline.
+                features = selected.loc[:, feature_names].copy()
+                for column in feature_names:
+                    features[column] = pd.to_numeric(features[column], errors="coerce")
+                features = features.replace([np.inf, -np.inf], np.nan)
+                classes = list(saved_model.classes_)
+                if 1 not in classes:
+                    raise ValueError(f"Unexpected classifier classes: {classes}")
+                incident_index = classes.index(1)
+                score = float(saved_model.predict_proba(features)[0, incident_index])
+                label = int(selected["label"].iloc[0])
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Incident-class model score", f"{score * 100:.2f}%")
+                col2.metric("Recorded incident label", "Positive (1)" if label else "No recorded incident (0)")
+                col3.metric("Input predictors", str(len(feature_names)))
+                st.progress(min(max(score, 0.0), 1.0))
+                st.warning(
+                    "A model score is not a calibrated probability of future insider misconduct. "
+                    "These are same-day features and incident-derived labels; do not interpret "
+                    "the result as validated advance warning."
+                )
+                with st.expander("View selected user-day input features", expanded=False):
+                    st.dataframe(
+                        pd.DataFrame({"Feature": feature_names, "Value": features.iloc[0].tolist()}),
+                        hide_index=True, width="stretch"
+                    )
+            except (ImportError, OSError, ValueError, KeyError, AttributeError, IndexError) as exc:
+                st.error(f"Unable to open the Risk Explorer: {exc}")
+                st.info("Check saved model compatibility, dataset columns and private paths.")
+
 st.markdown(
     '<div class="ueba-footer">UEBA ANALYTICS / CERT r4.2 &nbsp;·&nbsp; '
     'OFFLINE RESEARCH CONSOLE &nbsp;·&nbsp; NOT FOR OPERATIONAL THREAT DECISIONS</div>',
